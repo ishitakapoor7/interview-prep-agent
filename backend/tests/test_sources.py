@@ -1,3 +1,4 @@
+from app.config import MAX_DOC_CHARS
 from app.models import SourceDoc
 from app.research.sources import (
     clean_html,
@@ -19,6 +20,35 @@ class _FakeTavily:
 class _BoomTavily:
     def search(self, *a, **k):
         raise RuntimeError("network down")
+
+
+class _NonDictTavily:
+    """Response shape isn't the expected dict at all — e.g. a transport-level bug
+    returning a bare list instead of {"results": [...]}."""
+
+    def search(self, *a, **k):
+        return ["not", "a", "dict"]
+
+
+class _MalformedResultTavily:
+    """One result item isn't a dict (a bare string slipped into the list). A
+    well-behaved fetcher skips it and keeps the valid ones."""
+
+    def search(self, *a, **k):
+        return {
+            "results": [
+                "not-a-dict",
+                {"url": "https://x.com/2", "title": "ok", "raw_content": "good content"},
+            ]
+        }
+
+
+class _Snippet:
+    """Mirrors the real youtube_transcript_api FetchedTranscriptSnippet: an
+    object with a `.text` attribute, not a dict with a "text" key."""
+
+    def __init__(self, text):
+        self.text = text
 
 
 def test_clean_html_strips_tags_scripts_and_styles():
@@ -59,6 +89,16 @@ def test_search_web_returns_empty_list_on_failure():
     assert search_web("q", source_type="news", client=_BoomTavily()) == []
 
 
+def test_search_web_returns_empty_list_when_response_is_not_a_dict():
+    assert search_web("q", source_type="news", client=_NonDictTavily()) == []
+
+
+def test_search_web_skips_malformed_result_items_but_keeps_valid_ones():
+    docs = search_web("q", source_type="news", client=_MalformedResultTavily())
+    assert len(docs) == 1
+    assert docs[0].url == "https://x.com/2"
+
+
 def test_scrape_page_returns_doc_with_clean_text():
     def fetcher(url):
         return "<html><h1>Title</h1><p>We build robots.</p></html>"
@@ -76,13 +116,21 @@ def test_scrape_page_returns_none_on_failure():
     assert scrape_page("https://acme.com", source_type="website", fetcher=fetcher) is None
 
 
+def test_scrape_page_truncates_content_to_max_doc_chars():
+    def fetcher(url):
+        return "<p>" + ("word " * (MAX_DOC_CHARS // 4)) + "</p>"
+
+    doc = scrape_page("https://acme.com", source_type="website", fetcher=fetcher)
+    assert doc is not None
+    assert len(doc.content) == MAX_DOC_CHARS
+
+
 def test_fetch_video_transcript_joins_segments():
     class _Api:
-        @staticmethod
-        def get_transcript(video_id):
-            return [{"text": "we started"}, {"text": "in 2021"}]
+        def fetch(self, video_id):
+            return [_Snippet("we started"), _Snippet("in 2021")]
 
-    doc = fetch_video_transcript("abc123", api=_Api)
+    doc = fetch_video_transcript("abc123", api=_Api())
     assert doc is not None
     assert doc.source_type == "video"
     assert doc.content == "we started in 2021"
@@ -91,8 +139,28 @@ def test_fetch_video_transcript_joins_segments():
 
 def test_fetch_video_transcript_returns_none_when_disabled():
     class _Api:
-        @staticmethod
-        def get_transcript(video_id):
+        def fetch(self, video_id):
             raise RuntimeError("transcripts disabled")
 
-    assert fetch_video_transcript("abc123", api=_Api) is None
+    assert fetch_video_transcript("abc123", api=_Api()) is None
+
+
+def test_fetch_video_transcript_returns_none_for_malformed_segments():
+    class _Api:
+        def fetch(self, video_id):
+            # Plain dicts have no `.text` attribute — this is the exact shape
+            # bug that made the fetcher a silent no-op before the `.fetch()`/
+            # `.text` fix: parsing must not raise past the fail-soft guard.
+            return [{"text": "we started"}]
+
+    assert fetch_video_transcript("abc123", api=_Api()) is None
+
+
+def test_installed_youtube_transcript_api_still_exposes_fetch():
+    """Regression guard for the library's 1.x rename (get_transcript -> fetch)
+    that this fetcher's fail-soft `except` silently swallowed in production.
+    Checks the shape only; makes no network call."""
+    from youtube_transcript_api import YouTubeTranscriptApi
+
+    assert hasattr(YouTubeTranscriptApi, "fetch")
+    assert callable(YouTubeTranscriptApi.fetch)

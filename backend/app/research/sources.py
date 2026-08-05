@@ -7,6 +7,7 @@ many of these in parallel and must survive any single one failing.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -14,6 +15,8 @@ from bs4 import BeautifulSoup
 
 from app.config import MAX_DOC_CHARS, TAVILY_API_KEY
 from app.models import SourceDoc
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> str:
@@ -50,22 +53,36 @@ def search_web(
     client = client or _default_tavily()
     try:
         raw = client.search(query, max_results=max_results, include_raw_content=True)
+        results = raw.get("results", [])
     except Exception:
-        return []
-    docs: list[SourceDoc] = []
-    for r in raw.get("results", []):
-        body = r.get("raw_content") or r.get("content") or ""
-        if not body:
-            continue
-        docs.append(
-            SourceDoc(
-                source_type=source_type,
-                url=r.get("url", ""),
-                title=r.get("title", ""),
-                content=truncate(body, MAX_DOC_CHARS),
-                retrieved_at=_now(),
-            )
+        logger.warning(
+            "search_web failed for query=%r source_type=%s", query, source_type, exc_info=True
         )
+        return []
+
+    docs: list[SourceDoc] = []
+    for r in results:
+        try:
+            body = r.get("raw_content") or r.get("content") or ""
+            if not body:
+                continue
+            docs.append(
+                SourceDoc(
+                    source_type=source_type,
+                    url=r.get("url", ""),
+                    title=r.get("title", ""),
+                    content=truncate(body, MAX_DOC_CHARS),
+                    retrieved_at=_now(),
+                )
+            )
+        except Exception:
+            logger.warning(
+                "search_web skipped a malformed result for query=%r source_type=%s",
+                query,
+                source_type,
+                exc_info=True,
+            )
+            continue
     return docs
 
 
@@ -89,6 +106,7 @@ def scrape_page(
     try:
         html = fetcher(url)
     except Exception:
+        logger.warning("scrape_page failed for url=%s", url, exc_info=True)
         return None
     text = clean_html(html)
     if not text:
@@ -105,16 +123,20 @@ def scrape_page(
 def _default_transcript_api() -> Any:  # pragma: no cover - network
     from youtube_transcript_api import YouTubeTranscriptApi
 
-    return YouTubeTranscriptApi
+    return YouTubeTranscriptApi()
 
 
 def fetch_video_transcript(video_id: str, *, api: Any = None) -> SourceDoc | None:
+    """`api` is an object exposing `.fetch(video_id)` — the shape of an installed
+    `youtube_transcript_api.YouTubeTranscriptApi` instance, which returns an
+    iterable of snippets each carrying a `.text` attribute."""
     api = api or _default_transcript_api()
     try:
-        segments = api.get_transcript(video_id)
+        segments = api.fetch(video_id)
+        text = " ".join(s.text for s in segments)
     except Exception:
+        logger.warning("fetch_video_transcript failed for video_id=%s", video_id, exc_info=True)
         return None
-    text = " ".join(s["text"] for s in segments)
     if not text.strip():
         return None
     return SourceDoc(
