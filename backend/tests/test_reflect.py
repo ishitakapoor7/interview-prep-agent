@@ -6,8 +6,10 @@ class _FakeLlm:
     def __init__(self, payload):
         self._payload = payload
         self.last_user = None
+        self.call_count = 0
 
     def complete_json(self, system, user, schema, max_tokens=8192):
+        self.call_count += 1
         self.last_user = user
         return self._payload
 
@@ -55,6 +57,24 @@ async def test_reflect_and_fill_adds_new_docs_and_records_gaps():
     assert out.gaps == ["founding year unknown"]
     assert out.reflection_queries == ["Acme founded year"]
     assert any("Founded in 2021." in d.content for d in out.docs)
+
+
+async def test_reflect_and_fill_runs_exactly_one_round_when_gaps_are_found():
+    """The reflection loop is bounded by construction: even on the path where a
+    second round would be tempting (gaps were found, new evidence came back),
+    the model is consulted once and each follow-up query is searched once."""
+    llm = _FakeLlm(
+        {"gaps": ["founding year unknown"], "followup_queries": ["Acme founded year", "Acme founders"]}
+    )
+    calls = []
+
+    def searcher(query, *, source_type, max_results=3, client=None):
+        calls.append(query)
+        return [SourceDoc("news", f"https://{query}", "t", "body", "2026-08-04T00:00:00Z")]
+
+    await reflect_and_fill(_bundle(), llm, searcher=searcher)
+    assert llm.call_count == 1
+    assert sorted(calls) == sorted(["Acme founded year", "Acme founders"])
 
 
 async def test_reflect_and_fill_is_a_noop_when_no_gaps():
