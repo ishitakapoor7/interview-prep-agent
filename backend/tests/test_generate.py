@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from app.lesson.generate import generate_lesson_plan
@@ -23,14 +25,20 @@ def _bundle():
     )
 
 
+def _title_for(i: int) -> str:
+    # Beyond len(MODULE_TITLES) (used by the over-count test) the extra entries
+    # just need distinct titles — their content is never used.
+    return MODULE_TITLES[i] if i < len(MODULE_TITLES) else f"Extra Module {i}"
+
+
 def _payload(n_modules=7):
     return {
         "gap_analysis": "You match 3 of 5 required skills.",
         "modules": [
             {
                 "number": i + 1,
-                "title": MODULE_TITLES[i],
-                "content": f"content for {MODULE_TITLES[i]}",
+                "title": _title_for(i),
+                "content": f"content for {_title_for(i)}",
                 "quiz": [
                     {"question": f"q{i}?", "expected_points": [f"point{i}"]},
                 ],
@@ -42,6 +50,11 @@ def _payload(n_modules=7):
 
 def test_lesson_schema_requires_gap_analysis_and_modules():
     assert set(LESSON_SCHEMA["required"]) == {"gap_analysis", "modules"}
+
+
+def test_lesson_schema_pins_modules_array_to_exactly_seven():
+    assert LESSON_SCHEMA["properties"]["modules"]["minItems"] == 7
+    assert LESSON_SCHEMA["properties"]["modules"]["maxItems"] == 7
 
 
 def test_generate_returns_seven_typed_modules():
@@ -67,11 +80,19 @@ def test_generate_normalizes_module_numbers_and_titles():
     plan = generate_lesson_plan(_bundle(), "r", _FakeLlm(payload))
     assert plan.modules[2].number == 3
     assert plan.modules[2].title == MODULE_TITLES[2]
+    # Content is preserved even though the title/number were garbage — the
+    # module falls back to its original array position.
+    assert plan.modules[2].content == "content for Team & Culture"
 
 
-def test_generate_raises_when_module_count_is_wrong():
+def test_generate_raises_when_module_count_is_too_low():
     with pytest.raises(ValueError, match="expected 7 modules"):
         generate_lesson_plan(_bundle(), "r", _FakeLlm(_payload(n_modules=5)))
+
+
+def test_generate_raises_when_module_count_is_too_high():
+    with pytest.raises(ValueError, match="expected 7 modules"):
+        generate_lesson_plan(_bundle(), "r", _FakeLlm(_payload(n_modules=8)))
 
 
 def test_generate_tolerates_a_module_with_no_quiz():
@@ -79,3 +100,34 @@ def test_generate_tolerates_a_module_with_no_quiz():
     payload["modules"][1]["quiz"] = []
     plan = generate_lesson_plan(_bundle(), "r", _FakeLlm(payload))
     assert plan.modules[1].quiz == []
+
+
+def test_generate_matches_modules_by_title_when_model_returns_them_shuffled():
+    # This is the regression test for the order-mismatch bug: a model that
+    # returns all seven correct titles, just not in MODULE_TITLES order, must
+    # still land each module's content in its correct canonical slot.
+    payload = _payload()
+    shuffle = [6, 0, 5, 1, 4, 2, 3]
+    payload["modules"] = [payload["modules"][i] for i in shuffle]
+
+    plan = generate_lesson_plan(_bundle(), "r", _FakeLlm(payload))
+
+    for i, title in enumerate(MODULE_TITLES):
+        assert plan.modules[i].number == i + 1
+        assert plan.modules[i].title == title
+        assert plan.modules[i].content == f"content for {title}"
+        assert plan.modules[i].quiz[0].question == f"q{i}?"
+
+
+def test_generate_falls_back_to_position_for_a_noncanonical_title(caplog):
+    payload = _payload()
+    payload["modules"][0]["title"] = "Totally Made Up Title"
+
+    with caplog.at_level(logging.WARNING, logger="app.lesson.generate"):
+        plan = generate_lesson_plan(_bundle(), "r", _FakeLlm(payload))
+
+    assert plan.modules[0].title == MODULE_TITLES[0]
+    assert plan.modules[0].content == "content for Company Overview"
+    assert any(
+        "positional fallback" in record.message for record in caplog.records
+    )

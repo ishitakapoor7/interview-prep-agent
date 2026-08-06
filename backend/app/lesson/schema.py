@@ -16,6 +16,8 @@ LESSON_SCHEMA: dict = {
         "modules": {
             "type": "array",
             "description": f"Exactly {len(MODULE_TITLES)} modules, in the given order.",
+            "minItems": len(MODULE_TITLES),
+            "maxItems": len(MODULE_TITLES),
             "items": {
                 "type": "object",
                 "properties": {
