@@ -105,11 +105,20 @@ def text_contains_value(text: str, value: str) -> bool:
 
 
 def _attribute_scalar(
-    bundle_text: str, plan_text_str: str, forms: list[str] | None
+    bundle_text: str,
+    plan_text_str: str,
+    forms: list[str] | None,
+    *,
+    presence_check=text_contains_value,
 ) -> Attribution:
     """Attribute a scalar field (funding_usd, founded_year) given the surface
     forms the truth value could appear as. `forms is None` means truth itself
-    is null -- see the module-level note on that case below."""
+    is null -- see the module-level note on that case below.
+
+    `presence_check` is swappable so founded_year can use the proximity-aware
+    `text_contains_founding_year` (see below) instead of a bare substring
+    test, without duplicating the null-handling and research/synthesis/
+    extraction ladder below."""
     if forms is None:
         # Nothing was annotated as truth, so the prediction must have
         # hallucinated a value with nothing to search for in either text.
@@ -117,11 +126,56 @@ def _attribute_scalar(
         # default to synthesis, the step responsible for grounding claims in
         # evidence, rather than guessing.
         return "synthesis"
-    if not any(text_contains_value(bundle_text, f) for f in forms):
+    if not any(presence_check(bundle_text, f) for f in forms):
         return "research"
-    if not any(text_contains_value(plan_text_str, f) for f in forms):
+    if not any(presence_check(plan_text_str, f) for f in forms):
         return "synthesis"
     return "extraction"
+
+
+# Founding language that must appear near a bare year for the year to count as
+# "the founding year is present" rather than merely "this year appears
+# somewhere in a 30-doc bundle for unrelated reasons." A bare token like
+# "2025" collides constantly -- a funding headline, a conference name, a
+# product version, a copyright year -- so an unqualified presence check turns
+# routine noise into a confidently wrong "synthesis"/"extraction" verdict for
+# what is actually a research miss. Same false-positive class as the "Go" /
+# "Google" word-boundary bug above, just on a token that collides far more.
+_FOUNDING_LANGUAGE = ("founded", "since", "started", "est", "launched", "incorporated", "began")
+
+# Characters on each side of the year token to search for founding language.
+# 60 is roughly one short clause -- enough to span "founded in 2025" or
+# "2025, when the company started," without also reaching into an unrelated
+# neighboring sentence.
+_FOUNDING_YEAR_WINDOW_CHARS = 60
+
+
+def text_contains_founding_year(text: str, year: str) -> bool:
+    """Like `text_contains_value`, but for founded_year specifically: a bare
+    year only counts as "present" when founding language appears within
+    `_FOUNDING_YEAR_WINDOW_CHARS` characters of it.
+
+    Deliberate accepted trade-off: this can miss a genuine founding mention
+    phrased unusually (a date sitting alone in a table, with no nearby
+    prose), producing a false "research" failure for a fact that actually was
+    covered. That is the safer direction for an eval to err in -- under-
+    crediting the pipeline is honest, over-crediting it (as the old bare
+    presence check did) is not.
+    """
+    normalized_text = normalize(text)
+    normalized_year = normalize(year)
+    if not normalized_year:
+        return False
+    year_pattern = rf"(?<!\w){re.escape(normalized_year)}(?!\w)"
+    for match in re.finditer(year_pattern, normalized_text):
+        start = max(0, match.start() - _FOUNDING_YEAR_WINDOW_CHARS)
+        end = min(len(normalized_text), match.end() + _FOUNDING_YEAR_WINDOW_CHARS)
+        window = normalized_text[start:end]
+        if any(
+            re.search(rf"(?<!\w){kw}(?!\w)", window) for kw in _FOUNDING_LANGUAGE
+        ):
+            return True
+    return False
 
 
 def _attribute_set(
@@ -175,7 +229,9 @@ def attribute_failure(
 
     if score.field == "founded_year":
         forms = [str(truth.founded_year)] if truth.founded_year is not None else None
-        return _attribute_scalar(bundle_text, plan_text_str, forms)
+        return _attribute_scalar(
+            bundle_text, plan_text_str, forms, presence_check=text_contains_founding_year
+        )
 
     set_values = {
         "founders": truth.founders,

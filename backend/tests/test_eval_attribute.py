@@ -20,7 +20,12 @@ Truth table pinned here (see attribute.py docstring for the same table):
 import pytest
 
 from app.models import CompanyFacts, LessonPlan, ResearchBundle, SourceDoc
-from evals.attribute import attribute_failure, summarize, text_contains_value
+from evals.attribute import (
+    attribute_failure,
+    summarize,
+    text_contains_founding_year,
+    text_contains_value,
+)
 from evals.score import FieldScore
 
 
@@ -201,6 +206,41 @@ def test_funding_spaced_decimal_form_matches_in_bundle():
     bundle = _bundle("Raised $9.1 M in seed.")
     plan = _plan("Nothing about funding in this plan.")
     assert attribute_failure(score, bundle, plan, _truth()) == "synthesis"
+
+
+# --- founded_year: bare-year presence must be anchored to founding language -
+
+
+def test_text_contains_founding_year_rejects_bare_year_in_unrelated_prose():
+    # Review finding: a bare "2025" anywhere in a 30-doc bundle -- a roadmap
+    # update, a conference name, a copyright year -- used to satisfy the old
+    # unqualified presence check with zero founding language nearby.
+    assert not text_contains_founding_year(
+        "The company shipped its 2025 roadmap update to customers.", "2025"
+    )
+
+
+def test_text_contains_founding_year_accepts_year_near_founding_language():
+    assert text_contains_founding_year("Acme was founded in 2025 by its team.", "2025")
+
+
+def test_founded_year_bare_token_in_unrelated_prose_does_not_count_as_present():
+    # End-to-end: the year is mentioned, but nowhere near founding language,
+    # in both bundle and plan -- must attribute to "research" (not counted as
+    # present), not a false "synthesis"/"extraction" verdict.
+    score = FieldScore("founded_year", False, None, None, "")
+    bundle = _bundle("The company shipped its 2025 roadmap update to customers.")
+    plan = _plan("The company shipped its 2025 roadmap update to customers.")
+    truth = _truth(founded_year=2025)
+    assert attribute_failure(score, bundle, plan, truth) == "research"
+
+
+def test_founded_year_with_nearby_founding_language_counts_as_present():
+    score = FieldScore("founded_year", False, None, None, "")
+    bundle = _bundle("Acme was founded in 2025 by its team.")
+    plan = _plan("No dates mentioned.")
+    truth = _truth(founded_year=2025)
+    assert attribute_failure(score, bundle, plan, truth) == "synthesis"
 
 
 # --- edge cases: null truth values ----------------------------------------
