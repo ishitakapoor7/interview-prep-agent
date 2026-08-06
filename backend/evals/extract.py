@@ -132,10 +132,17 @@ def load_ground_truth(path: str) -> list[CompanyFacts]:
     return facts
 
 
-def _plan_text(plan: LessonPlan) -> str:
+def plan_text(plan: LessonPlan) -> str:
     """Flat text of the lesson plan, labeled the same way `ResearchBundle.all_text()`
     labels its sections, so the extraction prompt reads consistently regardless of
-    which pipeline stage supplied the evidence."""
+    which pipeline stage supplied the evidence.
+
+    Public (not `_plan_text`) because `evals/attribute.py` needs the exact same
+    plan text extraction saw, to tell a synthesis failure (fact never made it
+    into the plan) apart from an extraction failure (fact is in the plan but
+    was misread). Reusing this function instead of reimplementing it there is
+    what keeps the two from silently diverging.
+    """
     sections = [f"[gap_analysis]\n{plan.gap_analysis}"]
     for m in plan.modules:
         section = f"[module {m.number}] {m.title}\n{m.content}"
@@ -166,7 +173,7 @@ def extract_facts(
     must not be collapsed here; Task 11's attribution depends on telling "not
     claimed" apart from "claimed as empty/zero".
     """
-    user = f"Company: {bundle.company}\n\n=== LESSON PLAN ===\n{_plan_text(plan)}"
+    user = f"Company: {bundle.company}\n\n=== LESSON PLAN ===\n{plan_text(plan)}"
     result = llm.complete_json(system=_SYSTEM, user=user, schema=EXTRACT_SCHEMA)
 
     return CompanyFacts(
