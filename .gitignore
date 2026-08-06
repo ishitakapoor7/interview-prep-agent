@@ -8,6 +8,6 @@ venv/
 *.db-shm
 node_modules/
 dist/
-evals/runs/
+**/evals/runs/
 docs/
 .superpowers/

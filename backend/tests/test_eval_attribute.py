@@ -17,6 +17,8 @@ Truth table pinned here (see attribute.py docstring for the same table):
 | yes        | yes      | no       | "extraction"  |
 """
 
+import pytest
+
 from app.models import CompanyFacts, LessonPlan, ResearchBundle, SourceDoc
 from evals.attribute import attribute_failure, summarize, text_contains_value
 from evals.score import FieldScore
@@ -52,6 +54,25 @@ def _truth(**kw) -> CompanyFacts:
 def test_text_contains_value_matches_normalized_text():
     assert text_contains_value("Founded by Ada Lovelace.", "ada lovelace")
     assert not text_contains_value("Founded by someone else.", "ada lovelace")
+
+
+def test_text_contains_value_rejects_substring_inside_a_longer_word():
+    # Review finding: an unanchored substring search for "Go" matched inside
+    # "Google" -- not evidence the skill "Go" was actually mentioned. Word
+    # boundaries must reject that while still matching a genuine standalone
+    # occurrence, including one that happens to be an ordinary English word
+    # ("go deeper" really is the token "go", so it correctly matches -- the
+    # false positive this fixes is specifically the *inside-a-word* case).
+    assert not text_contains_value("Google Cloud", "Go")
+    assert text_contains_value("You should go deeper on payments.", "Go")
+    assert text_contains_value("We use Go for backend services.", "Go")
+
+
+def test_text_contains_value_still_matches_multi_word_values():
+    # Anchoring must not break matching a longer phrase embedded in a
+    # sentence -- only bare-word-boundary edges matter, not whole-string
+    # equality.
+    assert text_contains_value("Ada Lovelace co-founded the company.", "ada lovelace")
 
 
 # --- "none" --------------------------------------------------------------
@@ -159,6 +180,29 @@ def test_founders_all_absent_from_bundle_attributes_to_research():
     assert attribute_failure(score, bundle, plan, truth) == "research"
 
 
+def test_short_skill_value_does_not_falsely_match_inside_a_longer_word():
+    # Review finding, reproduced end to end: "Go" is a real required_skills
+    # entry (Stripe's row in ground_truth.json). Before anchoring, "Go"
+    # matched inside "Google" (bundle) and inside "go deeper" (plan), so this
+    # scored a confidently wrong "extraction" instead of the true "research"
+    # verdict -- the language was never retrieved at all.
+    score = FieldScore("required_skills", False, 0.0, 0.0, "")
+    bundle = _bundle("Stripe engineers use Google Cloud and Ruby.")
+    plan = _plan("You should go deeper on payments.")
+    truth = _truth(required_skills=["Go"])
+    assert attribute_failure(score, bundle, plan, truth) == "research"
+
+
+def test_funding_spaced_decimal_form_matches_in_bundle():
+    # Review finding, reproduced: "$9.1 M" (a literal space before the unit)
+    # is real coverage phrasing. The old surface forms only had the unspaced
+    # "9.1m", so this bundle text registered as a false "research" failure.
+    score = FieldScore("funding_usd", False, None, None, "")
+    bundle = _bundle("Raised $9.1 M in seed.")
+    plan = _plan("Nothing about funding in this plan.")
+    assert attribute_failure(score, bundle, plan, _truth()) == "synthesis"
+
+
 # --- edge cases: null truth values ----------------------------------------
 
 
@@ -185,6 +229,15 @@ def test_set_field_with_empty_truth_defaults_to_synthesis_without_crashing():
     score = FieldScore("founders", False, 0.0, None, "")
     truth = _truth(founders=[])
     assert attribute_failure(score, _bundle("anything"), _plan("anything"), truth) == "synthesis"
+
+
+def test_attribute_failure_raises_for_a_field_score_company_never_produces():
+    # score_company only ever emits the 5 scored fields; an unrecognized
+    # field name reaching attribute_failure is a caller bug and must be
+    # loud, not silently misattributed.
+    score = FieldScore("not_a_real_field", False, None, None, "")
+    with pytest.raises(ValueError, match="not_a_real_field"):
+        attribute_failure(score, _bundle("x"), _plan("x"), _truth())
 
 
 # --- summarize --------------------------------------------------------------
@@ -227,14 +280,23 @@ def test_summarize_reports_extraction_in_the_failure_mix():
 def test_summarize_handles_a_company_with_no_scores_without_crashing():
     # Mirrors what the harness records when a company's run raised mid-eval:
     # scores/attributions come back empty rather than aborting the report.
+    # This company has no "error" key either -- summarize must still treat
+    # empty scores as errored (see _errored's defensive fallback) rather than
+    # crash or silently count it as a scored company.
     results = [
         {"company": "A", "tier": "early", "scores": [], "attributions": []},
     ]
     table = summarize(results)
-    assert "early" in table
+    # n=0 scored, 1 error, every field cell is "—" -- not "early" merely
+    # appearing somewhere in the table.
+    assert "| early | — | — | — | — | — | 0 | 1 |" in table
+    assert "1 company failed to run" in table
 
 
-def test_summarize_is_deterministic_across_calls():
+def test_summarize_computes_exact_percentages_and_failure_counts():
+    # Pins concrete computed content (not a self-comparison, which cannot
+    # fail within a single process regardless of whether summarize is
+    # correct): the exact per-tier row and the exact failure-mix rows.
     results = [
         {
             "company": "A",
@@ -243,4 +305,38 @@ def test_summarize_is_deterministic_across_calls():
             "attributions": ["research"],
         },
     ]
-    assert summarize(results) == summarize(results)
+    table = summarize(results)
+    # founded_year: 0/1 correct -> 0%; no scores at all for the other four
+    # fields in this tier -> "—". n=1 scored, 0 errors.
+    assert "| mid | — | 0% | — | — | — | 1 | 0 |" in table
+    assert "failed to run" not in table
+    assert "| research | 1 | 100% |" in table
+    assert "| extraction | 0 | 0% |" in table
+    assert "| synthesis | 0 | 0% |" in table
+
+
+def test_summarize_reports_an_errors_column_separate_from_successful_n():
+    # Review finding: an errored company used to inflate `n` while
+    # contributing zero scores, making a partially-crashed run visually
+    # indistinguishable from a clean one.
+    results = [
+        {
+            "company": "A",
+            "tier": "early",
+            "scores": [FieldScore("founded_year", True, None, None, "")],
+            "attributions": ["none"],
+        },
+        {
+            "company": "B",
+            "tier": "early",
+            "scores": [],
+            "attributions": [],
+            "error": "simulated network failure",
+        },
+    ]
+    table = summarize(results)
+    assert "| n | errors |" in table
+    # One scored company (100% on founded_year), one errored -- n counts only
+    # the scored company; errors counts the other.
+    assert "| early | — | 100% | — | — | — | 1 | 1 |" in table
+    assert "1 company failed to run" in table

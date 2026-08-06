@@ -8,7 +8,7 @@ are saved per company under `evals/runs/` so a failure can be inspected by
 hand after the fact.
 
 Usage:
-    python -m evals.run_eval                    # all 30
+    python -m evals.run_eval                    # every row in ground_truth.json
     python -m evals.run_eval --limit 3          # smoke test
     python -m evals.run_eval --tier early       # one tier
 """
@@ -68,9 +68,12 @@ async def run_company(
     scores = score_company(predicted, row)
     attributions = [attribute_failure(s, bundle, plan, row) for s in scores]
 
-    os.makedirs(RUNS_DIR, exist_ok=True)
     run_path = os.path.join(RUNS_DIR, f"{row.company.replace('/', '_')}.json")
     try:
+        # Directory creation shares the try/except with the write itself: a
+        # permissions failure creating RUNS_DIR is exactly as tolerable as one
+        # failing the write one line later, and must be handled the same way.
+        os.makedirs(RUNS_DIR, exist_ok=True)
         with open(run_path, "w") as f:
             json.dump(
                 {
@@ -102,11 +105,19 @@ def select_rows(
     rows: list[CompanyFacts], *, tier: str | None, limit: int | None
 ) -> list[CompanyFacts]:
     """Apply --tier then --limit, in that order, so --limit always caps the
-    already-filtered set rather than sampling from the full 30 and possibly
-    returning zero rows for the requested tier."""
+    already-filtered set rather than sampling from the full set and possibly
+    returning zero rows for the requested tier.
+
+    `limit` is checked against `None`, not truthiness: `--limit 0` must mean
+    "run zero companies," not "no limit was given" (`0` and `None` are both
+    falsy, so a bare `if limit:` silently treats them the same and runs the
+    entire set). The CLI additionally rejects non-positive `--limit` values
+    outright (see `_positive_int`), so `0` only reaches here via a direct
+    call to `select_rows`, where it correctly produces an empty list.
+    """
     if tier:
         rows = [r for r in rows if r.tier == tier]
-    if limit:
+    if limit is not None:
         rows = rows[:limit]
     return rows
 
@@ -118,27 +129,53 @@ async def run_all(
     researcher: Callable[[str], Awaitable[ResearchBundle]] | None = None,
 ) -> list[dict]:
     """Run every row, one company at a time. A single company's failure is
-    logged and recorded as a scoreless result rather than aborting the whole
-    run -- a bad network day for one company shouldn't cost the other 29."""
+    logged and recorded as a scoreless, `"error"`-tagged result rather than
+    aborting the whole run -- a bad network day for one company shouldn't
+    cost the rest of the set. `evals.attribute.summarize` reads the `"error"`
+    key (and, defensively, empty `scores`) to keep failed companies visible
+    in the report instead of silently dropping out of the percentages."""
     results = []
     for i, row in enumerate(rows, 1):
         print(f"[{i}/{len(rows)}] {row.company} ({row.tier})...")
         try:
             results.append(await run_company(row, llm, researcher=researcher))
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "eval run failed for %s; recording as a failure and continuing",
                 row.company,
             )
             results.append(
-                {"company": row.company, "tier": row.tier, "scores": [], "attributions": []}
+                {
+                    "company": row.company,
+                    "tier": row.tier,
+                    "scores": [],
+                    "attributions": [],
+                    "error": str(exc),
+                }
             )
     return results
 
 
+def _positive_int(value: str) -> int:
+    """argparse `type=` for --limit: `--limit 0` must mean "run nothing," not
+    "no limit was given" (see select_rows), and a negative limit would slice
+    from the end of the list, which is never what's meant here. Both are
+    rejected at the CLI boundary rather than silently reinterpreted."""
+    n = int(value)
+    if n <= 0:
+        raise argparse.ArgumentTypeError(f"--limit must be a positive integer, got {value!r}")
+    return n
+
+
 async def main() -> None:
+    # Configured here, not at import time, so importing this module (e.g. from
+    # tests) never mutates global logging state as a side effect.
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--limit", type=_positive_int, default=None)
     parser.add_argument("--tier", choices=["large", "mid", "early"], default=None)
     args = parser.parse_args()
 

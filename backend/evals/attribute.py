@@ -25,9 +25,23 @@ calls for a better extraction prompt, independent of research or generation.
 
 Everything here is a mechanical substring/surface-form check over text — no
 model is ever consulted to decide where a failure belongs.
+
+One deliberate gap: when the *truth* value itself is null (`funding_usd` or
+`founded_year` is `None`) or a set field's truth list is empty, there is
+nothing to presence-check in either text -- the only way a field can still
+score wrong in that case is a hallucinated prediction. The correct diagnosis
+there depends on the *predicted* value (was the hallucination grounded in the
+plan's prose, or invented by extraction alone?), and `attribute_failure`'s
+approved signature does not receive the prediction -- only the `FieldScore`.
+`_attribute_scalar` and `_attribute_set` both default this case to
+`"synthesis"` as a documented guess, not a derived answer. Don't try to fix
+this inside either function alone; it needs a signature change this task
+intentionally did not make.
 """
 
 from __future__ import annotations
+
+import re
 
 from app.models import Attribution, CompanyFacts, LessonPlan, ResearchBundle
 from evals.extract import plan_text
@@ -43,25 +57,51 @@ _ATTRIBUTION_PRIORITY: dict[Attribution, int] = {
 
 
 def _funding_surface_forms(amount: int) -> list[str]:
-    """How a funding figure actually appears in prose. Press writes '$9.1M', not
-    '9100000', so a raw-integer search would report false research failures."""
+    """How a funding figure actually appears in prose. Press writes '$9.1M',
+    '$9.1 M' (a real space before the unit), or rounds off entirely to
+    '~$9M' -- never '9100000' -- so a raw-integer search, or one that only
+    checks the unspaced form, reports false research failures.
+
+    Both a tight ('9.1m') and spaced ('9.1 m') variant are included because
+    normalize() does not itself insert or remove the space between a number
+    and its unit -- whichever the source text used is what has to match.
+    A rounded whole-number form ('9m') is included too, since coverage
+    routinely rounds off the decimal.
+    """
     forms = [str(amount), f"{amount:,}"]
     millions = amount / 1_000_000
     if millions >= 1:
         trimmed = f"{millions:.1f}".rstrip("0").rstrip(".")
-        forms += [f"{trimmed}m", f"{trimmed} million"]
+        forms += [f"{trimmed}m", f"{trimmed} m", f"{trimmed} million"]
+        whole = str(round(millions))
+        forms += [f"{whole}m", f"{whole} m", f"{whole} million"]
     billions = amount / 1_000_000_000
     if billions >= 1:
         trimmed = f"{billions:.1f}".rstrip("0").rstrip(".")
-        forms += [f"{trimmed}b", f"{trimmed} billion"]
+        forms += [f"{trimmed}b", f"{trimmed} b", f"{trimmed} billion"]
+        whole = str(round(billions))
+        forms += [f"{whole}b", f"{whole} b", f"{whole} billion"]
     return forms
 
 
 def text_contains_value(text: str, value: str) -> bool:
-    """Normalized substring check, used symmetrically against both the bundle
-    text and the plan text -- one helper, so the two checks can never drift
-    apart in how they normalize."""
-    return normalize(value) in normalize(text)
+    """Word-boundary-anchored, normalized substring check, used symmetrically
+    against both the bundle text and the plan text -- one helper, so the two
+    checks can never drift apart in how they normalize or match.
+
+    Anchoring on `\\w` boundaries (rather than a bare substring test) matters
+    for short values: an unanchored search for the skill "Go" matches inside
+    "Google" and inside "go deeper on payments", turning a genuine research
+    miss into a confidently wrong "extraction" or "synthesis" verdict.
+    `normalize()` already reduces both sides to space-separated alphanumeric
+    tokens, so the token boundaries are exactly the string-edge/space
+    boundaries a `\\w` lookaround catches here.
+    """
+    normalized_value = normalize(value)
+    if not normalized_value:
+        return False
+    pattern = rf"(?<!\w){re.escape(normalized_value)}(?!\w)"
+    return re.search(pattern, normalize(text)) is not None
 
 
 def _attribute_scalar(
@@ -147,25 +187,59 @@ def attribute_failure(
     return _attribute_set(set_values, bundle_text, plan_text_str)
 
 
+def _errored(result: dict) -> bool:
+    """A company whose run raised mid-eval (see run_eval.run_all) is recorded
+    with an explicit `"error"` key and empty scores/attributions. We check
+    both signals -- not just the `"error"` key -- so a future caller that
+    forgets to set it but still leaves `scores` empty is still caught as
+    errored rather than silently read as "100% correct on zero fields"."""
+    return bool(result.get("error")) or not result.get("scores")
+
+
 def summarize(results: list[dict]) -> str:
-    """Markdown results table: per-tier, per-field accuracy plus the failure mix."""
+    """Markdown results table: per-tier, per-field accuracy plus the failure
+    mix, plus how many companies in each tier never produced a score at all.
+
+    `n` counts only companies that actually ran to completion; a separate
+    `errors` column counts companies whose run raised (see `run_eval.run_all`)
+    so a partially-crashed run cannot render identically to a clean one --
+    the percentages above are silently computed from survivors only, so the
+    error count has to be impossible to miss.
+    """
     tiers = ["large", "mid", "early"]
     fields = ["funding_usd", "founded_year", "founders", "required_skills", "recent_events"]
 
-    lines = ["| Tier | " + " | ".join(fields) + " | n |", "|---" * (len(fields) + 2) + "|"]
+    lines = [
+        "| Tier | " + " | ".join(fields) + " | n | errors |",
+        "|---" * (len(fields) + 3) + "|",
+    ]
+    total_errors = 0
     for tier in tiers:
         rows = [r for r in results if r["tier"] == tier]
         if not rows:
             continue
+        errored_rows = [r for r in rows if _errored(r)]
+        scored_rows = [r for r in rows if not _errored(r)]
+        total_errors += len(errored_rows)
         cells = []
         for field in fields:
-            scores = [s for r in rows for s in r["scores"] if s.field == field]
+            scores = [s for r in scored_rows for s in r["scores"] if s.field == field]
             if not scores:
                 cells.append("—")
                 continue
             pct = 100 * sum(1 for s in scores if s.correct) / len(scores)
             cells.append(f"{pct:.0f}%")
-        lines.append(f"| {tier} | " + " | ".join(cells) + f" | {len(rows)} |")
+        lines.append(
+            f"| {tier} | " + " | ".join(cells) + f" | {len(scored_rows)} | {len(errored_rows)} |"
+        )
+
+    if total_errors:
+        lines.append("")
+        lines.append(
+            f"**{total_errors} compan{'y' if total_errors == 1 else 'ies'} failed to run "
+            "and are excluded from the field percentages above -- see the errors column "
+            "and the run log for details.**"
+        )
 
     counts: dict[str, int] = {"research": 0, "extraction": 0, "synthesis": 0}
     for r in results:

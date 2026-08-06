@@ -3,13 +3,14 @@ fake researcher -- no test in this file makes a network call or needs an API
 key, per the Task 11 dispatch's environment constraints.
 """
 
+import argparse
 import json
 
 import pytest
 
 from app.models import MODULE_TITLES, CompanyFacts, ResearchBundle, SourceDoc
 from evals import run_eval
-from evals.run_eval import run_all, run_company, select_rows
+from evals.run_eval import _positive_int, run_all, run_company, select_rows
 
 
 class _FakeLlm:
@@ -158,6 +159,28 @@ async def test_run_company_survives_a_run_log_write_failure(tmp_path, monkeypatc
     assert "Acme" in caplog.text
 
 
+async def test_run_company_survives_a_makedirs_failure(tmp_path, monkeypatch, caplog):
+    # Regression for the review finding: os.makedirs used to sit outside the
+    # try/except that covers the write itself, so a directory-creation
+    # failure crashed run_company entirely while the identical failure one
+    # line later (open()) was tolerated. Both must now be handled the same
+    # way.
+    monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "unwritable"))
+
+    def _boom(*args, **kwargs):
+        raise OSError("simulated permissions failure")
+
+    monkeypatch.setattr("os.makedirs", _boom)
+    llm = _FakeLlm(_lesson_payload(), _extract_payload())
+
+    with caplog.at_level("ERROR"):
+        result = await run_company(_truth(), llm, researcher=_fake_researcher)
+
+    assert result["company"] == "Acme"
+    assert all(s.correct for s in result["scores"])
+    assert "Acme" in caplog.text
+
+
 # --- select_rows ---------------------------------------------------------
 
 
@@ -190,6 +213,44 @@ def test_select_rows_no_filters_returns_everything():
     assert len(rows) == 4
 
 
+def test_select_rows_limit_zero_returns_empty_list_not_the_full_set():
+    # Review finding: `if limit:` treats 0 the same as None (both falsy), so
+    # `--limit 0` used to silently run the entire set instead of nothing.
+    # limit must be checked against `None`, not truthiness.
+    rows = select_rows(_rows(), tier=None, limit=0)
+    assert rows == []
+
+
+# --- --limit CLI validation ------------------------------------------------
+
+
+def test_positive_int_accepts_positive_values():
+    assert _positive_int("3") == 3
+
+
+def test_positive_int_rejects_zero():
+    with pytest.raises(argparse.ArgumentTypeError):
+        _positive_int("0")
+
+
+def test_positive_int_rejects_negative_values():
+    with pytest.raises(argparse.ArgumentTypeError):
+        _positive_int("-1")
+
+
+def test_cli_limit_flag_rejects_zero_and_negative_at_the_argparse_boundary():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=_positive_int, default=None)
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--limit", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--limit", "-1"])
+
+    args = parser.parse_args(["--limit", "5"])
+    assert args.limit == 5
+
+
 # --- run_all: one company failing must not abort the run --------------------
 
 
@@ -208,6 +269,10 @@ async def test_run_all_continues_past_a_failing_company(tmp_path, monkeypatch):
     assert [r["company"] for r in results] == ["Bad", "Good"]
     assert results[0]["scores"] == []
     assert results[0]["attributions"] == []
+    # "error" is what evals.attribute.summarize keys off of to keep this
+    # company visible in RESULTS.md instead of silently dropping out.
+    assert "simulated network failure" in results[0]["error"]
+    assert "error" not in results[1]
     assert results[1]["scores"] != []
     assert all(s.correct for s in results[1]["scores"])
 
