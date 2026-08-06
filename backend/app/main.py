@@ -11,6 +11,7 @@ import logging
 import uuid
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.config import DB_PATH
@@ -25,6 +26,15 @@ from app.storage.db import SessionStore
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Interview Prep Agent")
+
+# The frontend (Vite dev server) runs on a different origin than the API, so
+# the browser needs an explicit CORS allow before it will let fetch() through.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class Deps:
