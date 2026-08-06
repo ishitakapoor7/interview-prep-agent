@@ -41,8 +41,9 @@ GAP_SCHEMA: dict = {
 _SYSTEM = (
     "You audit research evidence for an interview-prep briefing. Identify only "
     "concrete, checkable gaps: a missing founding year, two sources disagreeing on "
-    "a funding amount, a talk found but not transcribed. Do not invent gaps for "
-    "facts that are already well covered. Propose at most 4 follow-up queries."
+    "a funding amount, a founder talk whose transcript came back empty or disabled. "
+    "Do not invent gaps for facts that are already well covered. Propose at most 4 "
+    "follow-up queries."
 )
 
 
@@ -64,7 +65,10 @@ async def reflect_and_fill(
     searcher: Callable | None = None,
 ) -> ResearchBundle:
     searcher = searcher or search_web
-    gaps, queries = identify_gaps(bundle, llm)
+    # identify_gaps makes a synchronous Anthropic HTTP call. Off-load it like
+    # every other blocking call in the pipeline (see orchestrator.py) so it
+    # doesn't freeze the event loop for the duration of the call.
+    gaps, queries = await asyncio.to_thread(identify_gaps, bundle, llm)
     bundle.gaps = gaps
     bundle.reflection_queries = queries
     if not queries:

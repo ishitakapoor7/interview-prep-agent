@@ -7,6 +7,7 @@ pipeline for a fake without patching module globals.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 
@@ -98,7 +99,11 @@ async def create_session(
 ) -> dict:
     try:
         bundle = await deps.research(req.company, req.role, req.job_url)
-        plan = deps.plan(bundle, req.resume_text)
+        # deps.plan is a synchronous, minutes-long Anthropic HTTP call. Run it
+        # off the event loop, exactly like deps.research's own LLM/network
+        # calls, so /health and every other route stay responsive while a
+        # session is being built.
+        plan = await asyncio.to_thread(deps.plan, bundle, req.resume_text)
     except Exception:
         logger.exception(
             "Session creation pipeline failed for company=%r role=%r",
