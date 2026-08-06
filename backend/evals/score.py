@@ -73,7 +73,11 @@ def score_funding(pred: int | None, truth: int | None) -> FieldScore:
         )
     # abs(truth) (not truth) as the denominator: a negative truth would
     # otherwise flip the sign of delta and make an out-of-tolerance
-    # prediction compare as "correct".
+    # prediction compare as "correct" (e.g. truth=-1_000_000, pred=-5_000_000
+    # gives delta=-4.0 under signed division, which wrongly passes <= 0.05;
+    # abs(truth) gives 4.0 and correctly fails). Do not "simplify" this back
+    # to `/ truth` — see
+    # test_score_funding_negative_truth_is_not_flipped_to_correct_by_sign.
     delta = abs(pred - truth) / abs(truth)
     return FieldScore(
         "funding_usd",

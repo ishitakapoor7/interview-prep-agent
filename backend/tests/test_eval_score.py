@@ -110,6 +110,17 @@ def test_score_funding_truth_present_prediction_none_is_wrong_not_conflated_with
     assert s.correct is False
 
 
+def test_score_funding_negative_truth_is_not_flipped_to_correct_by_sign():
+    # Regression test for the abs(truth) fix: under signed division
+    # (delta = abs(pred - truth) / truth), truth=-1,000,000 and
+    # pred=-5,000,000 gives delta = abs(-4,000,000) / -1,000,000 = -4.0,
+    # which wrongly satisfies `delta <= FUNDING_TOLERANCE`. Dividing by
+    # abs(truth) gives delta = 4.0, correctly failing. This test only
+    # passes under the abs(truth) implementation.
+    s = score_funding(-5_000_000, -1_000_000)
+    assert s.correct is False
+
+
 def test_score_set_duplicates_in_list_do_not_inflate_score():
     s = score_set("founders", ["A B", "A B"], ["A B"])
     assert s.precision == 1.0
