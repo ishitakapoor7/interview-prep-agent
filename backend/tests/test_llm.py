@@ -59,12 +59,18 @@ def test_complete_json_returns_tool_input_dict():
 
 
 def test_complete_json_forces_the_emit_tool():
+    schema = {"type": "object", "properties": {"gaps": {"type": "array"}}}
     fake = _FakeClient(_FakeResponse([_FakeBlock(name="emit_result", input={})]))
     client = LlmClient(client=fake)
-    client.complete_json(system="s", user="u", schema={"type": "object"})
+    client.complete_json(system="s", user="u", schema=schema)
     kwargs = fake.messages.last_kwargs
     assert kwargs["tool_choice"] == {"type": "tool", "name": "emit_result"}
     assert kwargs["tools"][0]["name"] == "emit_result"
+    # The caller's schema must pass through untouched -- it IS the output
+    # contract. Four call sites (identify_gaps, extract_facts,
+    # generate_lesson_plan, grade_answer) depend on this being an exact
+    # pass-through, not a copy or a reshaped subset.
+    assert kwargs["tools"][0]["input_schema"] == schema
 
 
 def test_complete_json_raises_when_model_returns_no_tool_use():

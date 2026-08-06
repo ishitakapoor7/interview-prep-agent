@@ -94,7 +94,10 @@ def test_load_ground_truth_rejects_non_dict_row(tmp_path):
         load_ground_truth(str(path))
     message = str(exc_info.value)
     assert str(path) in message
-    assert "1" in message  # index of the offending row
+    # "row 1", not a bare "1" -- a pytest tmp_path routinely contains a "1"
+    # (e.g. ".../pytest-38/..."), so a bare-digit assertion can pass even
+    # when the row index is never actually named in the message.
+    assert "row 1" in message
 
 
 def test_load_ground_truth_rejects_row_missing_required_field(tmp_path):
@@ -106,7 +109,7 @@ def test_load_ground_truth_rejects_row_missing_required_field(tmp_path):
         load_ground_truth(str(path))
     message = str(exc_info.value)
     assert str(path) in message
-    assert "1" in message
+    assert "row 1" in message
     assert "tier" in message
 
 
@@ -124,7 +127,7 @@ def test_load_ground_truth_rejects_invalid_tier(tmp_path):
         load_ground_truth(str(path))
     message = str(exc_info.value)
     assert str(path) in message
-    assert "1" in message
+    assert "row 1" in message
     assert "midd" in message
 
 

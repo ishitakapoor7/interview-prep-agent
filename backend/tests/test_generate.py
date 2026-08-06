@@ -119,6 +119,34 @@ def test_generate_matches_modules_by_title_when_model_returns_them_shuffled():
         assert plan.modules[i].quiz[0].question == f"q{i}?"
 
 
+def test_generate_duplicate_title_claim_loser_fills_remaining_slot(caplog):
+    # Two modules both claim "Product & Technology"; nothing claims "The
+    # Role". By trace: the earlier (index 1) claimant wins the slot it
+    # claimed; the later (index 3, the original "The Role" module, now
+    # retitled) loses the claim, re-enters the unused-raw pool, and fills the
+    # one remaining unfilled slot via positional fallback. Both the
+    # duplicate-claim warning and the positional-fallback warning must fire.
+    payload = _payload()
+    payload["modules"][3]["title"] = "Product & Technology"
+
+    with caplog.at_level(logging.WARNING, logger="app.lesson.generate"):
+        plan = generate_lesson_plan(_bundle(), "r", _FakeLlm(payload))
+
+    # Slot 1 ("Product & Technology") is won by raw index 1, the first claimant.
+    assert plan.modules[1].title == "Product & Technology"
+    assert plan.modules[1].content == "content for Product & Technology"
+
+    # Slot 3 ("The Role") has no claimant left, so it's filled positionally by
+    # the loser of the duplicate claim -- raw index 3, whose content is
+    # unchanged even though its title was overwritten.
+    assert plan.modules[3].title == "The Role"
+    assert plan.modules[3].content == "content for The Role"
+
+    messages = [r.message for r in caplog.records]
+    assert any("claimed title" in m for m in messages)
+    assert any("positional fallback" in m for m in messages)
+
+
 def test_generate_falls_back_to_position_for_a_noncanonical_title(caplog):
     payload = _payload()
     payload["modules"][0]["title"] = "Totally Made Up Title"
