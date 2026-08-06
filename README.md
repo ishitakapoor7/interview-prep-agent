@@ -55,15 +55,20 @@ Glassdoor, news, Crunchbase, founder interviews/talks, and the job posting
 itself (or a scraped URL if one was supplied) — all concurrently. Each
 search is independently fault-tolerant: one dead source returns an empty
 result rather than aborting the run, and results are deduplicated by URL.
+Whichever founder-talk search results are actual YouTube videos also get
+their transcripts fetched in the same fan-out — still fail-soft, still
+concurrent — since a talk's transcript is one of the most differentiated
+sources available and there's no reason to wait for the reflection round to
+go looking for it.
 
 **2. One bounded reflection round.** The model reads everything phase 1
 gathered and is asked to name concrete, checkable gaps — a missing founding
-year, two sources disagreeing on a funding figure, a talk that was found but
-never actually scraped — and to propose up to four follow-up searches. Those
-searches run once and get merged back into the evidence bundle. The bound is
-structural (there is no loop, no retry-until-satisfied), so a run's cost and
-latency are predictable regardless of how much the model would like to keep
-digging.
+year, two sources disagreeing on a funding figure, a founder talk whose
+transcript came back empty or disabled — and to propose up to four follow-up
+searches. Those searches run once and get merged back into the evidence
+bundle. The bound is structural (there is no loop, no retry-until-satisfied),
+so a run's cost and latency are predictable regardless of how much the model
+would like to keep digging.
 
 **3. Schema-enforced lesson generation.** The finalized research bundle plus
 the candidate's resume go into a single model call that must return exactly
@@ -117,8 +122,12 @@ judging similarity:
   requirement would score correct answers as wrong. `None` (never claimed)
   and `0` (claimed as zero) are treated as distinct states, not coerced
   together.
-- `founders`, `required_skills`, `recent_events`: set precision/recall after
-  normalizing case and punctuation.
+- `founders`, `required_skills`, `recent_events`: exact set match after
+  normalizing case and punctuation — correct only when every annotated
+  member was predicted and nothing extra was hallucinated (precision == 1.0
+  and recall == 1.0). Precision and recall are still computed and recorded
+  per field for diagnosis, but the RESULTS percentage itself reports the
+  exact-match rate, not a partial-credit average of the two.
 
 No LLM-as-judge appears anywhere in the scoring path. An eval graded by a
 model can't be trusted to measure a model — the same failure mode (a
