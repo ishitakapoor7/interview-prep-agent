@@ -77,19 +77,19 @@ _REQUIRED_ROW_FIELDS = ("company", "tier")
 _VALID_TIERS = {"large", "mid", "early"}
 
 
-def load_ground_truth(path: str) -> list[CompanyFacts]:
-    """Load hand-annotated ground truth from a JSON array of rows shaped like
-    `CompanyFacts` (plus a `job_posting_url` annotation field that is recorded for
-    provenance but not part of `CompanyFacts` and is intentionally dropped here).
+def _load_validated_rows(path: str) -> list[dict]:
+    """Shared file-loading and structural validation for both readers below:
+    `load_ground_truth` (builds the compared `CompanyFacts`) and
+    `load_job_urls` (pulls the harness-only `job_posting_url` annotation that
+    `CompanyFacts` deliberately never carries). One function means the two
+    readers can't ever disagree about which rows in the file are well-formed.
 
-    Works for any number of rows — the seed file ships 3; the full dataset will
-    grow to 30 with no code change required here.
-
-    Raises `ValueError`, naming `path` and (where applicable) the offending row
-    index, on any malformed input: missing file, invalid JSON, a top level that
-    isn't an array, a row that isn't an object, a row missing `company`/`tier`,
-    or a row whose `tier` isn't one of `large`/`mid`/`early`. A hand-annotated
-    file should fail loudly at load time, not silently drop or misreport a row.
+    Raises `ValueError`, naming `path` and (where applicable) the offending
+    row index, on any malformed input: missing file, invalid JSON, a top
+    level that isn't an array, a row that isn't an object, a row missing
+    `company`/`tier`, or a row whose `tier` isn't one of `large`/`mid`/`early`.
+    A hand-annotated file should fail loudly at load time, not silently drop
+    or misreport a row.
     """
     try:
         with open(path) as f:
@@ -104,7 +104,6 @@ def load_ground_truth(path: str) -> list[CompanyFacts]:
             f"{path}: expected a JSON array of ground-truth rows, got {type(rows).__name__}"
         )
 
-    facts: list[CompanyFacts] = []
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             raise ValueError(f"{path}: row {i} is not a JSON object")
@@ -117,19 +116,47 @@ def load_ground_truth(path: str) -> list[CompanyFacts]:
                 f"{path}: row {i} has invalid tier {tier!r}; "
                 f"expected one of {sorted(_VALID_TIERS)}"
             )
-        facts.append(
-            CompanyFacts(
-                company=row["company"],
-                tier=tier,
-                funding_usd=row.get("funding_usd"),
-                founded_year=row.get("founded_year"),
-                founders=list(row.get("founders") or []),
-                product_line=row.get("product_line") or "",
-                required_skills=list(row.get("required_skills") or []),
-                recent_events=list(row.get("recent_events") or []),
-            )
+    return rows
+
+
+def load_ground_truth(path: str) -> list[CompanyFacts]:
+    """Load hand-annotated ground truth from a JSON array of rows shaped like
+    `CompanyFacts` (plus a `job_posting_url` annotation field that is recorded for
+    provenance but not part of `CompanyFacts` and is intentionally dropped here
+    -- see `load_job_urls` for the harness-only way to recover it).
+
+    Works for any number of rows — the seed file ships 3; the full dataset will
+    grow to 30 with no code change required here.
+    """
+    rows = _load_validated_rows(path)
+    return [
+        CompanyFacts(
+            company=row["company"],
+            tier=row["tier"],
+            funding_usd=row.get("funding_usd"),
+            founded_year=row.get("founded_year"),
+            founders=list(row.get("founders") or []),
+            product_line=row.get("product_line") or "",
+            required_skills=list(row.get("required_skills") or []),
+            recent_events=list(row.get("recent_events") or []),
         )
-    return facts
+        for row in rows
+    ]
+
+
+def load_job_urls(path: str) -> dict[str, str | None]:
+    """Company -> annotated `job_posting_url`, read from the same file as
+    `load_ground_truth` but kept out of `CompanyFacts` on purpose.
+
+    `CompanyFacts` is frozen and used on both sides of the eval comparison
+    (annotated truth and agent prediction) — `score_company` runs over it
+    field by field, so adding a URL there would risk it silently becoming a
+    "compared" field. This harness-local lookup is how `run_eval.py` recovers
+    the posting a row's `required_skills` were actually annotated against
+    (see Fix 2) without touching the compared type.
+    """
+    rows = _load_validated_rows(path)
+    return {row["company"]: row.get("job_posting_url") for row in rows}
 
 
 def plan_text(plan: LessonPlan) -> str:

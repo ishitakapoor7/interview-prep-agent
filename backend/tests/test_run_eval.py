@@ -11,6 +11,7 @@ import pytest
 from app.models import MODULE_TITLES, CompanyFacts, ResearchBundle, SourceDoc
 from evals import run_eval
 from evals.run_eval import _positive_int, run_all, run_company, select_rows
+from evals.extract import load_job_urls
 
 
 class _FakeLlm:
@@ -77,7 +78,14 @@ async def _fake_researcher(company: str) -> ResearchBundle:
     return ResearchBundle(
         company=company,
         role="Software Engineer",
-        docs=[SourceDoc("news", "u", "t", "Acme raised $9.1M in 2025.", "ts")],
+        # "founded in 2025" (not just a bare "2025") so the founded_year
+        # presence check -- which now requires nearby founding language, see
+        # attribute.text_contains_founding_year -- actually finds it here.
+        docs=[
+            SourceDoc(
+                "news", "u", "t", "Acme was founded in 2025 and raised $9.1M.", "ts"
+            )
+        ],
     )
 
 
@@ -179,6 +187,73 @@ async def test_run_company_survives_a_makedirs_failure(tmp_path, monkeypatch, ca
     assert result["company"] == "Acme"
     assert all(s.correct for s in result["scores"])
     assert "Acme" in caplog.text
+
+
+# --- job_posting_url threading (Fix 2) ---------------------------------------
+
+
+async def test_run_company_passes_job_url_through_to_gather_research(tmp_path, monkeypatch):
+    """The required_skills ground truth is hand-annotated from one specific
+    job posting. If gather_research never receives that URL, every miss gets
+    misattributed to research when it's really a harness omission -- this
+    pins that the URL actually reaches the call, not just that it's accepted
+    as a parameter somewhere upstream."""
+    monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path))
+    captured = {}
+
+    async def fake_gather_research(company, role, *, job_url=None, **kwargs):
+        captured["company"] = company
+        captured["job_url"] = job_url
+        return ResearchBundle(company=company, role=role, docs=[])
+
+    monkeypatch.setattr(run_eval, "gather_research", fake_gather_research)
+    llm = _FakeLlm(_lesson_payload(), _extract_payload())
+
+    await run_company(_truth(), llm, job_url="https://acme.com/jobs/1")
+
+    assert captured["company"] == "Acme"
+    assert captured["job_url"] == "https://acme.com/jobs/1"
+
+
+async def test_run_company_passes_no_job_url_when_none_annotated(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path))
+    captured = {}
+
+    async def fake_gather_research(company, role, *, job_url=None, **kwargs):
+        captured["job_url"] = job_url
+        return ResearchBundle(company=company, role=role, docs=[])
+
+    monkeypatch.setattr(run_eval, "gather_research", fake_gather_research)
+    llm = _FakeLlm(_lesson_payload(), _extract_payload())
+
+    await run_company(_truth(), llm)
+
+    assert captured["job_url"] is None
+
+
+async def test_run_all_looks_up_job_url_per_company(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path))
+    llm = _FakeLlm(_lesson_payload(), _extract_payload())
+    seen = []
+
+    async def fake_run_company(row, llm, *, researcher=None, job_url=None):
+        seen.append((row.company, job_url))
+        return {"company": row.company, "tier": row.tier, "scores": [], "attributions": []}
+
+    monkeypatch.setattr(run_eval, "run_company", fake_run_company)
+    rows = [_truth(company="A", tier="early"), _truth(company="B", tier="early")]
+    job_urls = {"A": "https://a.example.com/jobs", "B": None}
+
+    await run_all(rows, llm, job_urls=job_urls)
+
+    assert seen == [("A", "https://a.example.com/jobs"), ("B", None)]
+
+
+def test_load_job_urls_reads_the_real_seed_file():
+    urls = load_job_urls(run_eval.GROUND_TRUTH_PATH)
+    assert urls["Stripe"] == "https://stripe.com/jobs/listing/example"
+    assert urls["Mechanize"] == "https://www.mechanize.work/careers"
+    assert urls["Modal"] == "https://modal.com/careers"
 
 
 # --- select_rows ---------------------------------------------------------

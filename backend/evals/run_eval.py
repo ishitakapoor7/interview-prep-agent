@@ -29,7 +29,7 @@ from app.models import CompanyFacts, ResearchBundle
 from app.research.orchestrator import gather_research
 from app.research.reflect import reflect_and_fill
 from evals.attribute import attribute_failure, summarize
-from evals.extract import extract_facts, load_ground_truth
+from evals.extract import extract_facts, load_ground_truth, load_job_urls
 from evals.score import score_company
 
 logger = logging.getLogger(__name__)
@@ -51,16 +51,25 @@ async def run_company(
     llm: LlmClient,
     *,
     researcher: Callable[[str], Awaitable[ResearchBundle]] | None = None,
+    job_url: str | None = None,
 ) -> dict:
     """Run one company through research (or the injected `researcher` seam),
     lesson generation, extraction, scoring, and attribution. Writes the full
     trace to `evals/runs/<company>.json` and returns the summary dict that
     `summarize()` consumes.
+
+    `job_url` is the annotated `job_posting_url` for this row (see
+    `evals.extract.load_job_urls`) and is threaded straight into
+    `gather_research(job_url=...)`. Without it, `required_skills` ground truth
+    -- hand-annotated from that specific posting -- is scored against whatever
+    a generic "{company} Software Engineer job description requirements" web
+    search happens to surface, which silently mislabels a harness omission as
+    a pipeline research failure.
     """
     if researcher is not None:
         bundle = await researcher(row.company)
     else:
-        bundle = await gather_research(row.company, "Software Engineer")
+        bundle = await gather_research(row.company, "Software Engineer", job_url=job_url)
         bundle = await reflect_and_fill(bundle, llm)
 
     plan = generate_lesson_plan(bundle, _GENERIC_RESUME, llm)
@@ -127,18 +136,30 @@ async def run_all(
     llm: LlmClient,
     *,
     researcher: Callable[[str], Awaitable[ResearchBundle]] | None = None,
+    job_urls: dict[str, str | None] | None = None,
 ) -> list[dict]:
     """Run every row, one company at a time. A single company's failure is
     logged and recorded as a scoreless, `"error"`-tagged result rather than
     aborting the whole run -- a bad network day for one company shouldn't
     cost the rest of the set. `evals.attribute.summarize` reads the `"error"`
     key (and, defensively, empty `scores`) to keep failed companies visible
-    in the report instead of silently dropping out of the percentages."""
+    in the report instead of silently dropping out of the percentages.
+
+    `job_urls` (company -> annotated job_posting_url, see
+    `evals.extract.load_job_urls`) is looked up per row and threaded into
+    `run_company`. A row with no annotated URL simply gets `None`, which
+    `gather_research` already treats as "no job posting to scrape."
+    """
+    job_urls = job_urls or {}
     results = []
     for i, row in enumerate(rows, 1):
         print(f"[{i}/{len(rows)}] {row.company} ({row.tier})...")
         try:
-            results.append(await run_company(row, llm, researcher=researcher))
+            results.append(
+                await run_company(
+                    row, llm, researcher=researcher, job_url=job_urls.get(row.company)
+                )
+            )
         except Exception as exc:
             logger.exception(
                 "eval run failed for %s; recording as a failure and continuing",
@@ -180,9 +201,10 @@ async def main() -> None:
     args = parser.parse_args()
 
     rows = select_rows(load_ground_truth(GROUND_TRUTH_PATH), tier=args.tier, limit=args.limit)
+    job_urls = load_job_urls(GROUND_TRUTH_PATH)
 
     llm = LlmClient()
-    results = await run_all(rows, llm)
+    results = await run_all(rows, llm, job_urls=job_urls)
 
     report = summarize(results)
     print("\n" + report)
