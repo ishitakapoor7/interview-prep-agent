@@ -2,6 +2,7 @@ from app.config import MAX_DOC_CHARS
 from app.models import SourceDoc
 from app.research.sources import (
     clean_html,
+    extract_youtube_video_id,
     fetch_video_transcript,
     scrape_page,
     search_web,
@@ -154,6 +155,32 @@ def test_fetch_video_transcript_returns_none_for_malformed_segments():
             return [{"text": "we started"}]
 
     assert fetch_video_transcript("abc123", api=_Api()) is None
+
+
+def test_extract_youtube_video_id_from_watch_url():
+    assert extract_youtube_video_id("https://www.youtube.com/watch?v=abc123XYZ") == "abc123XYZ"
+
+
+def test_extract_youtube_video_id_from_watch_url_with_extra_query_params():
+    assert (
+        extract_youtube_video_id("https://www.youtube.com/watch?v=abc123&t=42s") == "abc123"
+    )
+
+
+def test_extract_youtube_video_id_from_short_url():
+    assert extract_youtube_video_id("https://youtu.be/abc123") == "abc123"
+
+
+def test_extract_youtube_video_id_from_embed_url():
+    assert extract_youtube_video_id("https://www.youtube.com/embed/abc123") == "abc123"
+
+
+def test_extract_youtube_video_id_returns_none_for_non_video_url():
+    assert extract_youtube_video_id("https://example.com/blog/some-talk") is None
+
+
+def test_extract_youtube_video_id_returns_none_for_youtube_channel_url():
+    assert extract_youtube_video_id("https://www.youtube.com/@SomeChannel") is None
 
 
 def test_installed_youtube_transcript_api_still_exposes_fetch():

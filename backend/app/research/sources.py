@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Any, Callable
+from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -118,6 +119,37 @@ def scrape_page(
         content=truncate(text, MAX_DOC_CHARS),
         retrieved_at=_now(),
     )
+
+
+def extract_youtube_video_id(url: str) -> str | None:
+    """Pull an 11-character-ish YouTube video ID out of a video URL, or None
+    if the URL isn't a recognizable YouTube video link.
+
+    Tavily's "video" source_type is a plain web search, so its results are
+    whatever pages rank for "founder interview talk podcast youtube" -- a
+    YouTube watch page, a youtu.be share link, but just as often a blog post
+    about the talk or a channel page with nothing to transcribe. This has to
+    fail cleanly (return None) on all of those rather than assume every
+    "video" result is a fetchable video.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host == "youtu.be":
+        video_id = parsed.path.lstrip("/").split("/")[0]
+        return video_id or None
+    if not (host == "youtube.com" or host.endswith(".youtube.com")):
+        return None
+    if parsed.path == "/watch":
+        values = parse_qs(parsed.query).get("v")
+        return values[0] if values else None
+    for prefix in ("/embed/", "/v/", "/shorts/"):
+        if parsed.path.startswith(prefix):
+            video_id = parsed.path[len(prefix):].split("/")[0]
+            return video_id or None
+    return None
 
 
 def _default_transcript_api() -> Any:  # pragma: no cover - network

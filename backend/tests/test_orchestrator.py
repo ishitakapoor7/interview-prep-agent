@@ -91,3 +91,77 @@ async def test_gather_research_runs_sources_concurrently():
     # Sequential execution would take num_queries * SLEEP (>= 1.2s here).
     # Concurrent execution should take roughly one SLEEP plus scheduling slack.
     assert elapsed < SLEEP * (num_queries / 2)
+
+
+# --- video transcript wiring (Fix 4) -----------------------------------------
+
+
+def _video_searcher(url: str):
+    """A searcher that returns one video-source hit at `url` and a plain doc
+    for every other source type."""
+
+    def searcher(query, *, source_type, max_results=3, client=None):
+        if source_type == "video":
+            return [_doc("video", url=url)]
+        return [_doc(source_type)]
+
+    return searcher
+
+
+async def test_gather_research_fetches_transcripts_for_video_results():
+    def transcript_fetcher(video_id):
+        return SourceDoc(
+            "video",
+            f"https://www.youtube.com/watch?v={video_id}",
+            "Transcript",
+            "we talked about scaling",
+            "2026-08-04T00:00:00Z",
+        )
+
+    bundle = await gather_research(
+        "Acme",
+        "SWE",
+        searcher=_video_searcher("https://www.youtube.com/watch?v=abc123"),
+        transcript_fetcher=transcript_fetcher,
+    )
+
+    transcripts = [d for d in bundle.docs if d.title == "Transcript"]
+    assert len(transcripts) == 1
+    assert transcripts[0].content == "we talked about scaling"
+    # The transcript supersedes the shallow video search hit at the same URL
+    # rather than both surviving as duplicates.
+    same_url = [d for d in bundle.docs if d.url == "https://www.youtube.com/watch?v=abc123"]
+    assert len(same_url) == 1
+
+
+async def test_gather_research_skips_video_urls_with_no_extractable_id():
+    calls = []
+
+    def transcript_fetcher(video_id):
+        calls.append(video_id)
+        return None
+
+    bundle = await gather_research(
+        "Acme",
+        "SWE",
+        searcher=_video_searcher("https://example.com/blog/some-talk"),
+        transcript_fetcher=transcript_fetcher,
+    )
+
+    assert calls == []  # no YouTube ID to fetch, so the fetcher is never called
+    assert bundle.docs  # other sources still populated the bundle
+
+
+async def test_gather_research_survives_a_failing_transcript_fetch():
+    def transcript_fetcher(video_id):
+        raise RuntimeError("transcript API down")
+
+    bundle = await gather_research(
+        "Acme",
+        "SWE",
+        searcher=_video_searcher("https://www.youtube.com/watch?v=abc123"),
+        transcript_fetcher=transcript_fetcher,
+    )
+
+    assert bundle.docs  # other sources still made it through
+    assert not any(d.title == "Transcript" for d in bundle.docs)
