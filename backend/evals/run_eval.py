@@ -60,11 +60,13 @@ async def run_company(
 
     `job_url` is the annotated `job_posting_url` for this row (see
     `evals.extract.load_job_urls`) and is threaded straight into
-    `gather_research(job_url=...)`. Without it, `required_skills` ground truth
-    -- hand-annotated from that specific posting -- is scored against whatever
-    a generic "{company} Software Engineer job description requirements" web
-    search happens to surface, which silently mislabels a harness omission as
-    a pipeline research failure.
+    `gather_research(job_url=...)`. Without it, research falls back to
+    whatever a generic "{company} Software Engineer job description
+    requirements" web search happens to surface instead of the real posting,
+    which makes Module 4 ("The Role") less grounded than it should be. Note
+    this is a realism concern, not a scoring one: `required_skills` -- the
+    field this URL originally existed to make scorable -- is collected but no
+    longer scored (see `evals/score.py`'s module docstring for why).
     """
     if researcher is not None:
         bundle = await researcher(row.company)

@@ -152,8 +152,8 @@ def load_job_urls(path: str) -> dict[str, str | None]:
     (annotated truth and agent prediction) — `score_company` runs over it
     field by field, so adding a URL there would risk it silently becoming a
     "compared" field. This harness-local lookup is how `run_eval.py` recovers
-    the posting a row's `required_skills` were actually annotated against
-    (see Fix 2) without touching the compared type.
+    the real posting for a row so the research phase can ground Module 4
+    ("The Role") in it, without touching the compared type.
     """
     rows = _load_validated_rows(path)
     return {row["company"]: row.get("job_posting_url") for row in rows}

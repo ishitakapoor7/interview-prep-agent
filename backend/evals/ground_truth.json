@@ -6,13 +6,12 @@
     "founded_year": 2010,
     "founders": ["Patrick Collison", "John Collison"],
     "product_line": "Payments infrastructure and financial APIs for internet businesses.",
-    "required_skills": ["Ruby", "Distributed Systems", "API Design", "SQL", "Go"],
     "recent_events": [
       "Announced expanded stablecoin payments support",
       "Published annual letter reporting total payment volume growth",
       "Expanded Stripe Billing feature set"
     ],
-    "job_posting_url": "https://stripe.com/jobs/listing/example"
+    "job_posting_url": "https://stripe.com/careers/listing/software-engineer-payments/7529787"
   },
   {
     "company": "Mechanize",
@@ -21,13 +20,12 @@
     "founded_year": 2025,
     "founders": ["Matthew Barnett", "Tamay Besiroglu", "Ege Erdil"],
     "product_line": "Evaluation environments and benchmarks for training frontier coding agents.",
-    "required_skills": ["Python", "RL Environments", "Evals", "Distributed Systems", "LLMs"],
     "recent_events": [
       "Raised $9.1M venture round",
       "Published GBA Eval benchmark",
       "Released gba-eval-attempts leaderboard results"
     ],
-    "job_posting_url": "https://www.mechanize.work/careers"
+    "job_posting_url": "https://www.mechanize.work/apply/software-engineer/"
   },
   {
     "company": "Modal",
@@ -36,7 +34,6 @@
     "founded_year": 2021,
     "founders": ["Erik Bernhardsson", "Akshat Bubna"],
     "product_line": "Serverless compute platform for running AI and data workloads.",
-    "required_skills": ["Python", "Rust", "Kubernetes", "Distributed Systems", "gRPC"],
     "recent_events": [
       "Announced Series B funding",
       "Launched GPU autoscaling improvements",

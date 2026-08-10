@@ -104,11 +104,10 @@ async def test_run_company_uses_injected_researcher_no_network(tmp_path, monkeyp
         "funding_usd",
         "founded_year",
         "founders",
-        "required_skills",
         "recent_events",
     }
     assert all(s.correct for s in result["scores"])
-    assert result["attributions"] == ["none"] * 5
+    assert result["attributions"] == ["none"] * 4
 
 
 async def test_run_company_writes_a_run_log_with_bundle_plan_and_scores(tmp_path, monkeypatch):
@@ -193,11 +192,12 @@ async def test_run_company_survives_a_makedirs_failure(tmp_path, monkeypatch, ca
 
 
 async def test_run_company_passes_job_url_through_to_gather_research(tmp_path, monkeypatch):
-    """The required_skills ground truth is hand-annotated from one specific
-    job posting. If gather_research never receives that URL, every miss gets
-    misattributed to research when it's really a harness omission -- this
-    pins that the URL actually reaches the call, not just that it's accepted
-    as a parameter somewhere upstream."""
+    """`job_posting_url` is annotated per row so the research phase sees the
+    real posting (used for Module 4, "The Role") instead of whatever a
+    generic "{company} Software Engineer job description" web search happens
+    to surface. If gather_research never receives that URL, this fidelity is
+    silently lost -- this pins that the URL actually reaches the call, not
+    just that it's accepted as a parameter somewhere upstream."""
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path))
     captured = {}
 
@@ -251,8 +251,11 @@ async def test_run_all_looks_up_job_url_per_company(tmp_path, monkeypatch):
 
 def test_load_job_urls_reads_the_real_seed_file():
     urls = load_job_urls(run_eval.GROUND_TRUTH_PATH)
-    assert urls["Stripe"] == "https://stripe.com/jobs/listing/example"
-    assert urls["Mechanize"] == "https://www.mechanize.work/careers"
+    assert (
+        urls["Stripe"]
+        == "https://stripe.com/careers/listing/software-engineer-payments/7529787"
+    )
+    assert urls["Mechanize"] == "https://www.mechanize.work/apply/software-engineer/"
     assert urls["Modal"] == "https://modal.com/careers"
 
 
