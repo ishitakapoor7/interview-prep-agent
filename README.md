@@ -97,12 +97,15 @@ company, is it right, and if not, which phase broke?
 ### Ground truth
 
 `backend/evals/ground_truth.json` holds hand-annotated facts per company —
-funding, founding year, founders, required skills, recent events, and a
-free-text product description — across three tiers meant to stress different
-parts of the research phase: **large** (well-covered, established
-companies), **mid** (funded but with thinner public coverage), and
-**early-stage** (minimal public footprint, the case most likely to expose
-research gaps rather than generation gaps).
+funding, founding year, founders, recent events, and a free-text product
+description — across three tiers meant to stress different parts of the
+research phase: **large** (well-covered, established companies), **mid**
+(funded but with thinner public coverage), and **early-stage** (minimal
+public footprint, the case most likely to expose research gaps rather than
+generation gaps). Each row also carries a `job_posting_url` for provenance
+and to ground the research phase's Module 4 ("The Role") in a real posting —
+see "`required_skills` unscored" below for why that field isn't listed among
+the hand-annotated facts above.
 
 **The dataset currently ships 3 seed rows** — Stripe (large), Modal (mid),
 and Mechanize (early) — one per tier, enough to exercise the harness
@@ -122,12 +125,12 @@ judging similarity:
   requirement would score correct answers as wrong. `None` (never claimed)
   and `0` (claimed as zero) are treated as distinct states, not coerced
   together.
-- `founders`, `required_skills`, `recent_events`: exact set match after
-  normalizing case and punctuation — correct only when every annotated
-  member was predicted and nothing extra was hallucinated (precision == 1.0
-  and recall == 1.0). Precision and recall are still computed and recorded
-  per field for diagnosis, but the RESULTS percentage itself reports the
-  exact-match rate, not a partial-credit average of the two.
+- `founders`, `recent_events`: exact set match after normalizing case and
+  punctuation — correct only when every annotated member was predicted and
+  nothing extra was hallucinated (precision == 1.0 and recall == 1.0).
+  Precision and recall are still computed and recorded per field for
+  diagnosis, but the RESULTS percentage itself reports the exact-match rate,
+  not a partial-credit average of the two.
 
 No LLM-as-judge appears anywhere in the scoring path. An eval graded by a
 model can't be trusted to measure a model — the same failure mode (a
@@ -149,6 +152,35 @@ another model. Scoring it would mean quietly reintroducing an LLM judge
 through the back door, which breaks the guarantee the rest of the eval
 rests on. It's kept in the dataset because it's useful for a human skimming
 a company's row, just not as a number that feeds the results table.
+
+**`required_skills` unscored.** This one started out as a scored field —
+`required_skills` was specified as the top 5 required skills read off a
+specific job posting — and got demoted after investigation showed the
+premise doesn't hold for real postings. Stripe's Software Engineer listings
+don't name any concrete technologies at all, just "professional software
+development experience" and "design, build, and maintain APIs, services, and
+systems." Mechanize's software engineer posting has no requirements section
+whatsoever. The skill lists that had been seeded into `ground_truth.json`
+(e.g. Stripe: `["Ruby", "Distributed Systems", "API Design", "SQL", "Go"]`)
+turned out to be invented, not read from any posting. And even where a
+posting does gesture at skills, it's almost always in prose ("design, build,
+and maintain APIs, services, and systems") rather than a list — turning that
+sentence into a skill list is interpretation, not extraction, and two
+annotators would reasonably produce two different lists from the same text.
+That's exactly what "no ground truth" means, and scoring it anyway would
+have produced confidently wrong numbers. The fabricated lists were removed
+from `ground_truth.json` entirely, rather than replaced with `[]` — an empty
+list would still read as "we annotated and found none," which is its own
+false claim. `required_skills` is still a real field: `CompanyFacts` and the
+extraction schema still carry it, and the pipeline's own extraction of it
+from a generated lesson plan is still collected and written to
+`evals/runs/<company>.json` for reading — just not scored or attributed
+against ground truth, the same treatment as `product_line` and for the same
+reason: no non-judgmental comparison exists, and a model judge to supply one
+would violate the "no LLM-as-judge" rule above. `job_posting_url` stays in
+the dataset and still flows into the research phase regardless, since a real
+posting is useful context for Module 4 ("The Role") even though nothing
+about it is graded.
 
 ### Three-way failure attribution
 
@@ -215,9 +247,12 @@ version is that an eval whose grader is itself a model can't credibly
 measure whether a model is right, so every scored comparison in this project
 is plain deterministic code.
 
-**`product_line` unscored.** Also covered above: free-text similarity has no
-non-judgmental comparison, and adding one would undermine the "no
-LLM-as-judge" guarantee for every other field too.
+**`product_line` and `required_skills` unscored.** Also covered above:
+free-text similarity has no non-judgmental comparison, and adding one would
+undermine the "no LLM-as-judge" guarantee for every other field too.
+`required_skills` reached this state via investigation, not by original
+design — real job postings routinely don't enumerate skills at all, so there
+was never reliable ground truth to score against.
 
 **One reflection round, not a loop.** The gap-finding step could in
 principle keep asking for more searches until it's satisfied. It's capped at
