@@ -9,6 +9,19 @@ non-judgmental comparison, and adding an LLM judge to score it would undermine
 the guarantee above. It is collected for reading, not grading. `company` and
 `tier` are not scored either: they identify which row is being compared, not a
 fact the pipeline is being graded on.
+
+`required_skills` is unscored for the same reason as `product_line`, though it
+took investigation to see it: real job postings frequently do not enumerate
+concrete technical skills at all (Stripe's Software Engineer listings name
+none; Mechanize's posting has no requirements section whatsoever), so there is
+no annotatable ground truth to score against. Where a posting does gesture at
+skills, it's almost always in prose ("Design, build, and maintain APIs,
+services, and systems") rather than a list — deriving a skill list from that
+sentence is interpretation, not extraction, and two annotators would produce
+different lists from the same text. This is a deliberate design decision, not
+an oversight: do not "fix" it by reintroducing `score_set("required_skills",
+...)` or, worse, an LLM judge. The field is still collected and reported
+(`CompanyFacts.required_skills`, `EXTRACT_SCHEMA`) — just never scored.
 """
 
 from __future__ import annotations
@@ -134,12 +147,11 @@ def score_set(field: str, pred: list[str], truth: list[str]) -> FieldScore:
 
 
 def score_company(pred: CompanyFacts, truth: CompanyFacts) -> list[FieldScore]:
-    """One FieldScore per scored field. `company`, `tier`, and `product_line`
-    are deliberately excluded — see module docstring."""
+    """One FieldScore per scored field. `company`, `tier`, `product_line`, and
+    `required_skills` are deliberately excluded — see module docstring."""
     return [
         score_funding(pred.funding_usd, truth.funding_usd),
         score_year(pred.founded_year, truth.founded_year),
         score_set("founders", pred.founders, truth.founders),
-        score_set("required_skills", pred.required_skills, truth.required_skills),
         score_set("recent_events", pred.recent_events, truth.recent_events),
     ]

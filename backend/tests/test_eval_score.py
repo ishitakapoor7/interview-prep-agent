@@ -84,7 +84,6 @@ def test_score_company_returns_one_score_per_field():
         "funding_usd",
         "founded_year",
         "founders",
-        "required_skills",
         "recent_events",
     }
     assert all(s.correct for s in scores)
@@ -142,10 +141,16 @@ def test_score_set_normalizes_case_and_punctuation_on_both_sides():
     assert s.recall == 1.0
 
 
-def test_score_company_excludes_product_line_company_and_tier():
-    truth = CompanyFacts(company="Acme", tier="early")
+def test_score_company_excludes_product_line_company_tier_and_required_skills():
+    # Locks the set of scored fields: `required_skills` was investigated and
+    # found to have no annotatable ground truth (real postings routinely
+    # don't enumerate skills, and deriving them from prose is interpretation,
+    # not extraction -- see evals/score.py's module docstring). This test
+    # must fail if scoring is ever reintroduced for it.
+    truth = CompanyFacts(company="Acme", tier="early", required_skills=["Python"])
     scores = score_company(truth, truth)
     fields = {s.field for s in scores}
     assert "product_line" not in fields
     assert "company" not in fields
     assert "tier" not in fields
+    assert "required_skills" not in fields

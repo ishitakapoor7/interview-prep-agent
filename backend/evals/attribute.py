@@ -181,7 +181,7 @@ def text_contains_founding_year(text: str, year: str) -> bool:
 def _attribute_set(
     values: list[str], bundle_text: str, plan_text_str: str
 ) -> Attribution:
-    """Attribute a set field (founders, required_skills, recent_events).
+    """Attribute a set field (founders, recent_events).
 
     `attribute_failure` only receives the score, not the predicted list, so we
     can't tell precisely which truth members were missed versus which extra
@@ -235,7 +235,6 @@ def attribute_failure(
 
     set_values = {
         "founders": truth.founders,
-        "required_skills": truth.required_skills,
         "recent_events": truth.recent_events,
     }.get(score.field)
     if set_values is None:
@@ -263,7 +262,7 @@ def summarize(results: list[dict]) -> str:
     error count has to be impossible to miss.
     """
     tiers = ["large", "mid", "early"]
-    fields = ["funding_usd", "founded_year", "founders", "required_skills", "recent_events"]
+    fields = ["funding_usd", "founded_year", "founders", "recent_events"]
 
     lines = [
         "| Tier | " + " | ".join(fields) + " | n | errors |",

@@ -185,16 +185,17 @@ def test_founders_all_absent_from_bundle_attributes_to_research():
     assert attribute_failure(score, bundle, plan, truth) == "research"
 
 
-def test_short_skill_value_does_not_falsely_match_inside_a_longer_word():
-    # Review finding, reproduced end to end: "Go" is a real required_skills
-    # entry (Stripe's row in ground_truth.json). Before anchoring, "Go"
-    # matched inside "Google" (bundle) and inside "go deeper" (plan), so this
-    # scored a confidently wrong "extraction" instead of the true "research"
-    # verdict -- the language was never retrieved at all.
-    score = FieldScore("required_skills", False, 0.0, 0.0, "")
-    bundle = _bundle("Stripe engineers use Google Cloud and Ruby.")
+def test_short_value_does_not_falsely_match_inside_a_longer_word_end_to_end():
+    # Review finding, reproduced end to end: before anchoring, a short value
+    # like "Go" matched inside "Google" (bundle) and inside "go deeper"
+    # (plan), so this scored a confidently wrong "extraction" instead of the
+    # true "research" verdict -- the value was never retrieved at all.
+    # Exercised via `founders` (a still-scored set field): `required_skills`
+    # is no longer scored or attributed, so it can no longer carry this case.
+    score = FieldScore("founders", False, 0.0, 0.0, "")
+    bundle = _bundle("Acme engineers use Google Cloud and Ruby.")
     plan = _plan("You should go deeper on payments.")
-    truth = _truth(required_skills=["Go"])
+    truth = _truth(founders=["Go"])
     assert attribute_failure(score, bundle, plan, truth) == "research"
 
 
@@ -272,11 +273,15 @@ def test_set_field_with_empty_truth_defaults_to_synthesis_without_crashing():
 
 
 def test_attribute_failure_raises_for_a_field_score_company_never_produces():
-    # score_company only ever emits the 5 scored fields; an unrecognized
-    # field name reaching attribute_failure is a caller bug and must be
-    # loud, not silently misattributed.
-    score = FieldScore("not_a_real_field", False, None, None, "")
-    with pytest.raises(ValueError, match="not_a_real_field"):
+    # score_company only ever emits the 4 scored fields (funding_usd,
+    # founded_year, founders, recent_events); an unrecognized field name
+    # reaching attribute_failure is a caller bug and must be loud, not
+    # silently misattributed. `required_skills` is a real, natural example of
+    # this: it's still a CompanyFacts field and still collected, but
+    # score_company deliberately never emits a FieldScore for it (see
+    # evals/score.py), so it can never legitimately reach attribute_failure.
+    score = FieldScore("required_skills", False, None, None, "")
+    with pytest.raises(ValueError, match="required_skills"):
         attribute_failure(score, _bundle("x"), _plan("x"), _truth())
 
 
@@ -329,7 +334,7 @@ def test_summarize_handles_a_company_with_no_scores_without_crashing():
     table = summarize(results)
     # n=0 scored, 1 error, every field cell is "—" -- not "early" merely
     # appearing somewhere in the table.
-    assert "| early | — | — | — | — | — | 0 | 1 |" in table
+    assert "| early | — | — | — | — | 0 | 1 |" in table
     assert "1 company failed to run" in table
 
 
@@ -346,9 +351,9 @@ def test_summarize_computes_exact_percentages_and_failure_counts():
         },
     ]
     table = summarize(results)
-    # founded_year: 0/1 correct -> 0%; no scores at all for the other four
+    # founded_year: 0/1 correct -> 0%; no scores at all for the other three
     # fields in this tier -> "—". n=1 scored, 0 errors.
-    assert "| mid | — | 0% | — | — | — | 1 | 0 |" in table
+    assert "| mid | — | 0% | — | — | 1 | 0 |" in table
     assert "failed to run" not in table
     assert "| research | 1 | 100% |" in table
     assert "| extraction | 0 | 0% |" in table
@@ -378,5 +383,5 @@ def test_summarize_reports_an_errors_column_separate_from_successful_n():
     assert "| n | errors |" in table
     # One scored company (100% on founded_year), one errored -- n counts only
     # the scored company; errors counts the other.
-    assert "| early | — | 100% | — | — | — | 1 | 1 |" in table
+    assert "| early | — | 100% | — | — | 1 | 1 |" in table
     assert "1 company failed to run" in table
