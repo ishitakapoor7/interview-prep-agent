@@ -10,6 +10,25 @@ were actually collected — no re-searching the web on every question.
 It is a backend (FastAPI + SQLite, calling the Anthropic API and the Tavily
 search API) and a small React frontend that consumes it.
 
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-61DAFB?style=flat-square&logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
+
+## At a glance
+
+| | |
+|---|---|
+| **Pipeline** | Parallel research fan-out → one bounded reflection round → schema-enforced generation → RAG-grounded Q&A |
+| **Output** | Seven fixed modules, each with prose and a quiz, personalized against the candidate's resume |
+| **Cost bound** | Structural, not heuristic — no retry loop, and nothing after generation calls the search API again |
+| **Eval** | Deterministic scoring only; failures attributed to research, synthesis, or extraction |
+| **No LLM-as-judge** | Every scored comparison is plain string/number/set code |
+
+**Contents** · [Running it](#running-it) · [Architecture](#architecture) · [The eval](#the-eval) · [Design decisions](#design-decisions)
+
 ## Running it
 
 Requirements: Python 3.11+, Node 18+, an `ANTHROPIC_API_KEY`, and a
@@ -54,7 +73,10 @@ issues a fixed set of searches — official site, engineering blog, LinkedIn,
 Glassdoor, news, Crunchbase, founder interviews/talks, and the job posting
 itself (or a scraped URL if one was supplied) — all concurrently. Each
 search is independently fault-tolerant: one dead source returns an empty
-result rather than aborting the run, and results are deduplicated by URL.
+result rather than aborting the run, and results are deduplicated by URL —
+with every URL form of a single YouTube video (share link, `/embed/`,
+tracking params) collapsing onto one key, so a video never contributes both
+a search snippet and its transcript.
 Whichever founder-talk search results are actual YouTube videos also get
 their transcripts fetched in the same fan-out — still fail-soft, still
 concurrent — since a talk's transcript is one of the most differentiated
@@ -207,7 +229,7 @@ Attribution is itself mechanical — a normalized, word-boundary-anchored
 substring search, including funding-specific surface-form handling (`$9.1M`,
 `9.1 million`, `~$9M`, etc.) — not a model call.
 
-### Running it
+### Running the eval
 
 ```bash
 cd backend
